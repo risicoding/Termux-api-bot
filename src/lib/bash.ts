@@ -147,13 +147,3 @@ export class BashSession {
     this.bash.kill();
   }
 }
-
-async function main() {
-  const executor = new BashSession();
-  await executor.run("cd");
-  const res = await executor.run("pwd");
-
-  console.log(res);
-}
-
-main();

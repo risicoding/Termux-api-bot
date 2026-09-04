@@ -8,7 +8,7 @@ const main = async () => {
   const program = p
     .name("termux-api-bot")
     .description("telegram bot for interacting with termux-api")
-    .version("v0.4.0");
+    .version("v0.4.1");
 
   const daemon = program.command("daemon").description("commands for daemon");
 
