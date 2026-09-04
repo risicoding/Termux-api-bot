@@ -6,6 +6,9 @@
   "scripts": {
     "build": "rspack build"
   },
+  "files": [
+    "build"
+  ],
   "keywords": [],
   "author": "",
   "license": "ISC",
