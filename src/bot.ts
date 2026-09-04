@@ -10,6 +10,7 @@ import {
 } from "@termux-bridge/core";
 import { startProcessManager } from "./process";
 import { getBotToken, getChatId } from "./conf";
+import { ShellExecutor } from "./lib/exec";
 
 const BOT_TOKEN = getBotToken();
 const CHAT_ID = getChatId();
@@ -29,6 +30,8 @@ if (!Number.isInteger(allowedChatId)) {
 }
 
 const bot = new Bot(BOT_TOKEN);
+
+const executor = new ShellExecutor();
 
 const dateTime = (date: Date = new Date()) =>
   date.toLocaleString("en-IN", {
@@ -392,6 +395,26 @@ bot.command("calllog", async (ctx) => {
       );
     },
   );
+});
+
+bot.command("shell", async (ctx) => {
+  const msg = ctx.message?.text;
+  if (!msg) return ctx.reply("cant find msg");
+
+  const cmdWithArgs = msg.slice(6).trim();
+
+  const [cmd, ...args] = cmdWithArgs.split(" ");
+  if (!cmd) return ctx.reply("command not found");
+
+  const result = await executor.run(cmd, [...args]);
+
+  if (result.isErr())
+    return ctx.reply(
+      `${result.error.log()}\n${JSON.stringify(result.error, null, 2)}`,
+    );
+
+  if (result.value.stderr.length !== 0) return ctx.reply(result.value.stderr);
+  return ctx.reply("Success:\n" + result.value.stdout);
 });
 
 /*
