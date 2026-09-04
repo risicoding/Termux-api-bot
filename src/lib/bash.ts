@@ -16,13 +16,10 @@ export class ExecError extends AppError {
 export class BashSession {
   private readonly bash: ChildProcessWithoutNullStreams;
 
-  private stdoutBuffer = "";
-  private stderrBuffer = "";
-
   private queue: Promise<unknown> = Promise.resolve();
 
   constructor(cwd = process.cwd()) {
-    this.bash = spawn("bash", ["--noprofile", "--norc", "-i"], {
+    this.bash = spawn("bash", ["--noprofile", "--norc"], {
       cwd,
       stdio: ["pipe", "pipe", "pipe"],
       env: process.env,
@@ -30,32 +27,31 @@ export class BashSession {
 
     this.bash.stdout.setEncoding("utf8");
     this.bash.stderr.setEncoding("utf8");
-
-    this.bash.stdout.on("data", (data: string) => {
-      this.stdoutBuffer += data;
-    });
-
-    this.bash.stderr.on("data", (data: string) => {
-      this.stderrBuffer += data;
-    });
   }
 
   run(command: string): ResultAsync<ExecResult, ExecError> {
     const task = this.queue.then(() => this.execute(command));
 
-    // Keep the queue alive even when a command fails.
+    // Don't let a failed command break the queue.
     this.queue = task.catch(() => undefined);
 
-    return ResultAsync.fromPromise(
-      task,
-      (e) => new ExecError("Failed to execute command", e),
-    );
+    return ResultAsync.fromPromise(task, (e) => {
+      if (e instanceof ExecError) {
+        return e;
+      }
+
+      return new ExecError("Failed to execute command", e, {
+        command,
+      });
+    });
   }
 
   private execute(command: string): Promise<ExecResult> {
     return new Promise((resolve, reject) => {
       const id = randomUUID();
-      const marker = `__EXEC_DONE_${id}__`;
+
+      const doneMarker = `__EXEC_DONE_${id}__`;
+      const exitMarker = `__EXEC_EXIT_${id}_`;
 
       let stdout = "";
       let stderr = "";
@@ -63,21 +59,25 @@ export class BashSession {
       const onStdout = (data: string) => {
         stdout += data;
 
-        const markerIndex = stdout.indexOf(marker);
+        const doneIndex = stdout.indexOf(doneMarker);
 
-        if (markerIndex === -1) {
+        if (doneIndex === -1) {
           return;
         }
 
-        const beforeMarker = stdout.slice(0, markerIndex);
+        const output = stdout.slice(0, doneIndex);
 
-        const match = beforeMarker.match(/__EXEC_EXIT_(-?\d+)__$/);
+        const match = output.match(
+          new RegExp(`__EXEC_EXIT_${id}_(-?\\d+)__\\n?$`),
+        );
 
-        const exitCode = match ? Number(match[1]) : 0;
+        if (!match) {
+          return;
+        }
 
-        const cleanStdout = beforeMarker
-          .replace(/__EXEC_EXIT_-?\d+__$/, "")
-          .trimEnd();
+        const exitCode = Number(match[1]);
+
+        const cleanStdout = output.slice(0, -match[0].length).trimEnd();
 
         cleanup();
 
@@ -87,16 +87,19 @@ export class BashSession {
             stderr: stderr.trimEnd(),
             exitCode,
           });
-        } else {
-          reject(
-            new ExecError(`Command exited with code ${exitCode}`, {
-              exitCode,
-              signal: null,
-              stdout: cleanStdout,
-              stderr: stderr.trimEnd(),
-            }),
-          );
+
+          return;
         }
+
+        reject(
+          new ExecError(`Command exited with code ${exitCode}`, undefined, {
+            command,
+            exitCode,
+            signal: null,
+            stdout: cleanStdout,
+            stderr: stderr.trimEnd(),
+          }),
+        );
       };
 
       const onStderr = (data: string) => {
@@ -105,10 +108,13 @@ export class BashSession {
 
       const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
         cleanup();
+
         reject(
           new ExecError(
             signal ? `Bash terminated by ${signal}` : "Bash process terminated",
+            undefined,
             {
+              command,
               exitCode: code,
               signal,
               stdout,
@@ -130,8 +136,9 @@ export class BashSession {
 
       this.bash.stdin.write(
         `${command}\n` +
-          `printf '\\n${marker}\\n'\n` +
-          `printf '__EXEC_EXIT_%s__\\n' "$?"\n`,
+          `__exec_status=$?\n` +
+          `printf '${exitMarker}%s__\\n' "$__exec_status"\n` +
+          `printf '${doneMarker}\\n'\n`,
       );
     });
   }
@@ -140,121 +147,13 @@ export class BashSession {
     this.bash.kill();
   }
 }
-//
-// Usage:
-//
-// const bash = new BashSession();
-//
-// const result = await bash.run("pwd");
-//
-// result.match(
-//   (result) => {
-//     console.log(result.stdout);
-//   },
-//   (error) => {
-//     console.error(error);
-//   },
-// );
-//
-// Now state persists:
-//
-// await bash.run("cd /tmp");
-//
-// const result = await bash.run("pwd");
-//
-// result.match(
-//   (result) => console.log(result.stdout),
-//   (error) => console.error(error),
-// );
-//
-// Output:
-//
-// /tmp
-//
-// And shell state persists too:
-//
-// await bash.run("export FOO=hello");
-//
-// const result = await bash.run("echo $FOO");
-//
-// Output:
-//
-// hello
-//
-// Globbing works naturally:
-//
-// await bash.run("ls *.zip");
-//
-// Pipes work:
-//
-// await bash.run("ps aux | grep node");
-//
-// And commands such as:
-//
-// await bash.run("cd ~/projects && pnpm install");
-//
-// work exactly as they would in a terminal.
-//
-// Why the queue matters
-//
-// You should not do this:
-//
-// bash.run("sleep 5");
-// bash.run("pwd");
-//
-// simultaneously against the same Bash process.
-//
-// Both commands would be written into the same stdin stream, and their output would become ambiguous.
-//
-// The queue makes it:
-//
-// command 1
-//    ↓
-// wait for marker
-//    ↓
-// command 2
-//    ↓
-// wait for marker
-//    ↓
-// command 3
-//
-// That's especially important for Telegram, where multiple messages can arrive almost simultaneously.
-//
-// For Telegram
-//
-// I'd then maintain one "BashSession" per chat:
-//
-// const sessions = new Map<number, BashSession>();
-//
-// function getSession(chatId: number): BashSession {
-//   let session = sessions.get(chatId);
-//
-//   if (!session) {
-//     session = new BashSession();
-//     sessions.set(chatId, session);
-//   }
-//
-//   return session;
-// }
-//
-// Then:
-//
-// const session = getSession(ctx.chat.id);
-//
-// const result = await session.run(command);
-//
-// result.match(
-//   async ({ stdout, stderr, exitCode }) => {
-//     await ctx.reply(
-//       stdout || stderr || `Exit code: ${exitCode}`,
-//     );
-//   },
-//
-//   async (error) => {
-//     await ctx.reply(
-//       `❌ ${error.tag}\n\n` +
-//       `${error.message}\n\n` +
-//       `${error.stderr}`,
-//     );
-//   },
-// );
+
+async function main() {
+  const executor = new BashSession();
+  await executor.run("cd");
+  const res = await executor.run("pwd");
+
+  console.log(res);
+}
+
+main();
