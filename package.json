@@ -1,0 +1,29 @@
+{
+  "name": "termux-api-bot",
+  "type": "module",
+  "version": "0.1.0",
+  "description": "",
+  "scripts": {
+    "build": "rspack build"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "packageManager": "pnpm@10.34.5",
+  "devDependencies": {
+    "@rspack/cli": "^2.2.2",
+    "@rspack/core": "^2.2.2",
+    "@termux-bridge/core": "https://github.com/risicoding/termux-bridge/releases/download/core-v0.2.0/termux-bridge-core-0.2.0.tgz",
+    "@types/node": "^26.4.1",
+    "commander": "^15.0.0",
+    "conf": "^15.1.0",
+    "dotenv": "^17.4.2",
+    "env-paths": "^4.0.0",
+    "esbuild": "^0.28.2",
+    "grammy": "^1.46.0",
+    "logger": "^0.0.1",
+    "neverthrow": "^8.2.0",
+    "typescript": "^7.0.2",
+    "winston": "^3.19.0"
+  }
+}
